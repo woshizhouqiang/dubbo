@@ -41,6 +41,8 @@ public interface CommonConstants {
 
     String METADATA_SERVICE_PORT_KEY = "metadata-service-port";
 
+    String METADATA_SERVICE_PROTOCOL_KEY = "metadata-service-protocol";
+
     String LIVENESS_PROBE_KEY = "liveness-probe";
 
     String READINESS_PROBE_KEY = "readiness-probe";
@@ -304,6 +306,8 @@ public interface CommonConstants {
 
     String INVOKER_LISTENER_KEY = "invoker.listener";
 
+    String REGISTRY_PROTOCOL_LISTENER_KEY = "registry.protocol.listener";
+
     String DUBBO_VERSION_KEY = "dubbo";
 
     String TAG_KEY = "dubbo.tag";
@@ -476,4 +480,25 @@ public interface CommonConstants {
      */
     String DUBBO_NETWORK_IGNORED_INTERFACE = "dubbo.network.interface.ignored";
 
+    String OS_NAME_KEY = "os.name";
+
+    String OS_LINUX_PREFIX = "linux";
+
+    String OS_WIN_PREFIX = "win";
+
+    String RECONNECT_TASK_TRY_COUNT = "dubbo.reconnect.reconnectTaskTryCount";
+
+    int DEFAULT_RECONNECT_TASK_TRY_COUNT = 10;
+
+    String RECONNECT_TASK_PERIOD = "dubbo.reconnect.reconnectTaskPeriod";
+
+    int DEFAULT_RECONNECT_TASK_PERIOD = 1000;
+
+    String RESELECT_COUNT = "dubbo.reselect.count";
+
+    int DEFAULT_RESELECT_COUNT = 10;
+
+    String ENABLE_CONNECTIVITY_VALIDATION = "dubbo.connectivity.validation";
+
+    String DUBBO_INTERNAL_APPLICATION = "DUBBO_INTERNAL_APPLICATION";
 }

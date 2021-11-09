@@ -38,6 +38,7 @@ import org.apache.dubbo.rpc.protocol.dubbo.support.RemoteService;
 import org.apache.dubbo.rpc.protocol.dubbo.support.RemoteServiceImpl;
 import org.apache.dubbo.rpc.protocol.dubbo.support.Type;
 import org.apache.dubbo.rpc.service.EchoService;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
@@ -178,8 +179,8 @@ public class DubboProtocolTest {
         assertEquals("hello world@" + RemoteServiceImpl.class.getName(), remote.sayHello("world"));
 
 //       can't find target service addresses
-        EchoService remoteEecho = (EchoService) remote;
-        assertEquals(remoteEecho.$echo("ok"), "ok");
+        EchoService remoteEcho = (EchoService) remote;
+        assertEquals(remoteEcho.$echo("ok"), "ok");
     }
 
     @Test
@@ -242,7 +243,7 @@ public class DubboProtocolTest {
         Mockito.when(dic.getConsumerUrl()).thenReturn(url);
 
         FailfastCluster cluster = new FailfastCluster();
-        Invoker<DemoService> clusterInvoker = cluster.join(dic);
+        Invoker<DemoService> clusterInvoker = cluster.join(dic, true);
         Result result = clusterInvoker.invoke(invocation);
         Thread.sleep(10);
         assertEquals(result.getValue(), "consumer");

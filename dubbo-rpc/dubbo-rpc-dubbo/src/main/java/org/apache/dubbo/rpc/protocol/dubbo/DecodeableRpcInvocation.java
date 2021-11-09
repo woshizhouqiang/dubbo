@@ -43,7 +43,7 @@ import org.apache.dubbo.rpc.support.RpcUtils;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -222,10 +222,10 @@ public class DecodeableRpcInvocation extends RpcInvocation implements Codec, Dec
             setParameterTypes(pts);
 
             Map<String, Object> map = in.readAttachments();
-            if (map != null && map.size() > 0) {
+            if (CollectionUtils.isNotEmptyMap(map)) {
                 Map<String, Object> attachment = getObjectAttachments();
                 if (attachment == null) {
-                    attachment = new LinkedHashMap<>();
+                    attachment = new HashMap<>();
                 }
                 attachment.putAll(map);
                 setObjectAttachments(attachment);
@@ -237,7 +237,7 @@ public class DecodeableRpcInvocation extends RpcInvocation implements Codec, Dec
             }
 
             setArguments(args);
-            String targetServiceName = buildKey((String) getAttachment(PATH_KEY),
+            String targetServiceName = buildKey(getAttachment(PATH_KEY),
                 getAttachment(GROUP_KEY),
                 getAttachment(VERSION_KEY));
             setTargetServiceUniqueName(targetServiceName);

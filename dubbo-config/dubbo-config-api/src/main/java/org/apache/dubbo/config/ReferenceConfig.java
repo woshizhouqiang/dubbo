@@ -37,10 +37,8 @@ import org.apache.dubbo.rpc.Protocol;
 import org.apache.dubbo.rpc.ProxyFactory;
 import org.apache.dubbo.rpc.cluster.Cluster;
 import org.apache.dubbo.rpc.cluster.directory.StaticDirectory;
-import org.apache.dubbo.rpc.cluster.directory.UrlStaticDirectory;
 import org.apache.dubbo.rpc.cluster.support.ClusterUtils;
 import org.apache.dubbo.rpc.cluster.support.registry.ZoneAwareCluster;
-import org.apache.dubbo.rpc.model.ApplicationModel;
 import org.apache.dubbo.rpc.model.AsyncMethodInfo;
 import org.apache.dubbo.rpc.model.ConsumerModel;
 import org.apache.dubbo.rpc.model.ModuleServiceRepository;
@@ -195,13 +193,20 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
     }
 
     @Override
-    public synchronized T get() {
+    public T get() {
         if (destroyed) {
             throw new IllegalStateException("The invoker of ReferenceConfig(" + url + ") has already destroyed!");
         }
 
         if (ref == null) {
-            init();
+            // ensure start module, compatible with old api usage
+            getScopeModel().getDeployer().start();
+
+            synchronized (this) {
+                if (ref == null) {
+                    init();
+                }
+            }
         }
 
         return ref;
@@ -234,13 +239,7 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
         if (initialized) {
             return;
         }
-
-        if (getScopeModel() == null) {
-            setScopeModel(ApplicationModel.defaultModel().getDefaultModule());
-        }
-
-        // prepare application for reference
-        getScopeModel().getDeployer().prepare();
+        initialized = true;
 
         if (!this.isRefreshed()) {
             this.refresh();
@@ -271,8 +270,6 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
 
         consumerModel.setProxyObject(ref);
         consumerModel.initMethodModels();
-
-        initialized = true;
 
         checkInvokerAvailable();
     }
@@ -399,11 +396,17 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
      *
      * @param referenceParameters
      */
+    @SuppressWarnings({"unchecked", "rawtypes"})
     private void createInvokerForLocal(Map<String, String> referenceParameters) {
         URL url = new ServiceConfigURL(LOCAL_PROTOCOL, LOCALHOST_VALUE, 0, interfaceClass.getName()).addParameters(referenceParameters);
         url = url.setScopeModel(getScopeModel());
         url = url.setServiceModel(consumerModel);
-        invoker = protocolSPI.refer(interfaceClass, url);
+        Invoker<?> withFilter = protocolSPI.refer(interfaceClass, url);
+        // Local Invoke ( Support Cluster Filter / Filter )
+        List<Invoker<?>> invokers = new ArrayList<>();
+        invokers.add(withFilter);
+        invoker = Cluster.getCluster(url.getScopeModel(), Cluster.DEFAULT).join(new StaticDirectory(url, invokers), true);
+
         if (logger.isInfoEnabled()) {
             logger.info("Using in jvm service " + interfaceClass.getName());
         }
@@ -470,7 +473,7 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
             if (!UrlUtils.isRegistry(curUrl)){
                 List<Invoker<?>> invokers = new ArrayList<>();
                 invokers.add(invoker);
-                invoker = Cluster.getCluster(scopeModel, Cluster.DEFAULT).join(new UrlStaticDirectory(curUrl,invokers));
+                invoker = Cluster.getCluster(scopeModel, Cluster.DEFAULT).join(new StaticDirectory(curUrl, invokers), true);
             }
         } else {
             List<Invoker<?>> invokers = new ArrayList<>();
@@ -492,7 +495,7 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
                 String cluster = registryUrl.getParameter(CLUSTER_KEY, ZoneAwareCluster.NAME);
                 // The invoker wrap sequence would be: ZoneAwareClusterInvoker(StaticDirectory) -> FailoverClusterInvoker
                 // (RegistryDirectory, routing happens here) -> Invoker
-                invoker = Cluster.getCluster(registryUrl.getScopeModel(), cluster, false).join(new StaticDirectory(registryUrl, invokers));
+                invoker = Cluster.getCluster(registryUrl.getScopeModel(), cluster, false).join(new StaticDirectory(registryUrl, invokers), false);
             } else {
                 // not a registry url, must be direct invoke.
                 if (CollectionUtils.isEmpty(invokers)) {
@@ -500,7 +503,7 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
                 }
                 URL curUrl = invokers.get(0).getUrl();
                 String cluster = curUrl.getParameter(CLUSTER_KEY, Cluster.DEFAULT);
-                invoker = Cluster.getCluster(scopeModel, cluster).join(new UrlStaticDirectory(curUrl, invokers));
+                invoker = Cluster.getCluster(scopeModel, cluster).join(new StaticDirectory(curUrl, invokers), true);
             }
         }
     }
@@ -546,7 +549,6 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
             } catch (ClassNotFoundException e) {
                 throw new IllegalStateException(e.getMessage(), e);
             }
-            //checkInterfaceAndMethods(interfaceClass, getMethods());
         }
 
         checkStubAndLocal(interfaceClass);
@@ -589,7 +591,7 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
                 isJvmRefer = false;
             } else {
                 // by default, reference local service if there is
-                isJvmRefer = InjvmProtocol.getInjvmProtocol().isInjvmRefer(tmpUrl);
+                isJvmRefer = InjvmProtocol.getInjvmProtocol(getScopeModel()).isInjvmRefer(tmpUrl);
             }
         } else {
             isJvmRefer = isInjvm();
