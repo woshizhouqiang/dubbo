@@ -138,6 +138,8 @@ public interface CommonConstants {
 
     int DEFAULT_TIMEOUT = 1000;
 
+    String SESSION_KEY = "session";
+
     // used by invocation attachments to transfer timeout from Consumer to Provider.
     // works as a replacement of TIMEOUT_KEY on wire, which seems to be totally useless in previous releases).
     String TIMEOUT_ATTACHMENT_KEY = "_TO";
@@ -215,9 +217,9 @@ public interface CommonConstants {
 
     String METADATA_KEY = "metadata-type";
 
-    String CONFIG_MAPPING_TYPE = "config";
+    String REPORT_METADATA_KEY = "report-metadata";
 
-    String METADATA_MAPPING_TYPE = "metadata";
+    String REPORT_DEFINITION_KEY = "report-definition";
 
     String DEFAULT_METADATA_STORAGE_TYPE = "local";
 
@@ -376,8 +378,6 @@ public interface CommonConstants {
 
     int DEFAULT_FAILBACK_TIMES = 3;
 
-    String REGISTER_KEY = "register";
-
     String INTERFACES = "interfaces";
 
     String SSL_ENABLED_KEY = "ssl-enabled";
@@ -433,6 +433,8 @@ public interface CommonConstants {
     String CLASSPATH_URL_PREFIX = "classpath:";
 
     String DEFAULT_VERSION = "0.0.0";
+
+    String ROUTER_KEY = "router";
 
     String EXPORT_ASYNC_KEY = "export-async";
 
@@ -501,4 +503,36 @@ public interface CommonConstants {
     String ENABLE_CONNECTIVITY_VALIDATION = "dubbo.connectivity.validation";
 
     String DUBBO_INTERNAL_APPLICATION = "DUBBO_INTERNAL_APPLICATION";
+
+    String RETRY_TIMES_KEY = "retry-times";
+
+    String RETRY_PERIOD_KEY = "retry-period";
+
+    String SYNC_REPORT_KEY = "sync-report";
+
+    String CYCLE_REPORT_KEY = "cycle-report";
+
+    String WORKING_CLASSLOADER_KEY = "WORKING_CLASSLOADER";
+
+    String STAGED_CLASSLOADER_KEY = "STAGED_CLASSLOADER";
+
+    String PROVIDER_ASYNC_KEY = "PROVIDER_ASYNC";
+
+    String REGISTER_IP_KEY = "register.ip";
+
+    String CURRENT_CLUSTER_INVOKER_KEY = "currentClusterInvoker";
+
+    String ENABLE_ROUTER_SNAPSHOT_PRINT_KEY = "ENABLE_ROUTER_SNAPSHOT_PRINT";
+
+    String INJVM_COPY_UTIL_KEY = "injvm-copy-util";
+
+    String INJVM_IGNORE_SAME_MODULE_KEY = "injvm.ignore.same-module";
+
+    String SET_FUTURE_IN_SYNC_MODE = "future.sync.set";
+
+    String CLEAR_FUTURE_AFTER_GET = "future.clear.once";
+
+    String NATIVE_STUB = "nativestub";
+
+    String METADATA = "metadata";
 }

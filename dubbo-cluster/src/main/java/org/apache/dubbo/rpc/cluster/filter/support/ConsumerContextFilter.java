@@ -23,6 +23,7 @@ import org.apache.dubbo.common.utils.NetUtils;
 import org.apache.dubbo.rpc.AsyncRpcResult;
 import org.apache.dubbo.rpc.Filter;
 import org.apache.dubbo.rpc.Invocation;
+import org.apache.dubbo.rpc.InvokeMode;
 import org.apache.dubbo.rpc.Invoker;
 import org.apache.dubbo.rpc.PenetrateAttachmentSelector;
 import org.apache.dubbo.rpc.Result;
@@ -50,65 +51,65 @@ import static org.apache.dubbo.common.constants.CommonConstants.TIME_COUNTDOWN_K
 @Activate(group = CONSUMER, order = Integer.MIN_VALUE)
 public class ConsumerContextFilter implements ClusterFilter, ClusterFilter.Listener {
 
-    private ApplicationModel applicationModel;
+    private Set<PenetrateAttachmentSelector> supportedSelectors;
 
     public ConsumerContextFilter(ApplicationModel applicationModel) {
-        this.applicationModel = applicationModel;
+        ExtensionLoader<PenetrateAttachmentSelector> selectorExtensionLoader = applicationModel.getExtensionLoader(PenetrateAttachmentSelector.class);
+        supportedSelectors = selectorExtensionLoader.getSupportedExtensionInstances();
     }
 
     @Override
     public Result invoke(Invoker<?> invoker, Invocation invocation) throws RpcException {
-        RpcContext.getServiceContext()
+        RpcContext.RestoreServiceContext originServiceContext = RpcContext.storeServiceContext();
+        try {
+            RpcContext.getServiceContext()
+                .setInvoker(invoker)
                 .setInvocation(invocation)
                 .setLocalAddress(NetUtils.getLocalHost(), 0);
 
-        RpcContext context = RpcContext.getClientAttachment();
-        context.setAttachment(REMOTE_APPLICATION_KEY, invoker.getUrl().getApplication());
-        if (invocation instanceof RpcInvocation) {
-            ((RpcInvocation) invocation).setInvoker(invoker);
-        }
-
-        ExtensionLoader<PenetrateAttachmentSelector> selectorExtensionLoader = applicationModel.getExtensionLoader(PenetrateAttachmentSelector.class);
-        Set<String> supportedSelectors = selectorExtensionLoader.getSupportedExtensions();
-        if (CollectionUtils.isNotEmpty(supportedSelectors)) {
-            for (String supportedSelector : supportedSelectors) {
-                Map<String, Object> selected = selectorExtensionLoader.getExtension(supportedSelector).select();
-                if (CollectionUtils.isNotEmptyMap(selected)) {
-                    ((RpcInvocation) invocation).addObjectAttachments(selected);
-                }
+            RpcContext context = RpcContext.getClientAttachment();
+            context.setAttachment(REMOTE_APPLICATION_KEY, invoker.getUrl().getApplication());
+            if (invocation instanceof RpcInvocation) {
+                ((RpcInvocation) invocation).setInvoker(invoker);
             }
-        } else {
-            ((RpcInvocation) invocation).addObjectAttachments(RpcContext.getServerAttachment().getObjectAttachments());
-        }
 
-        Map<String, Object> contextAttachments = RpcContext.getClientAttachment().getObjectAttachments();
-        if (CollectionUtils.isNotEmptyMap(contextAttachments)) {
-            /**
-             * invocation.addAttachmentsIfAbsent(context){@link RpcInvocation#addAttachmentsIfAbsent(Map)}should not be used here,
-             * because the {@link RpcContext#setAttachment(String, String)} is passed in the Filter when the call is triggered
-             * by the built-in retry mechanism of the Dubbo. The attachment to update RpcContext will no longer work, which is
-             * a mistake in most cases (for example, through Filter to RpcContext output traceId and spanId and other information).
-             */
-            ((RpcInvocation) invocation).addObjectAttachments(contextAttachments);
-        }
+            if (CollectionUtils.isNotEmpty(supportedSelectors)) {
+                for (PenetrateAttachmentSelector supportedSelector : supportedSelectors) {
+                    Map<String, Object> selected = supportedSelector.select();
+                    if (CollectionUtils.isNotEmptyMap(selected)) {
+                        ((RpcInvocation) invocation).addObjectAttachments(selected);
+                    }
+                }
+            } else {
+                ((RpcInvocation) invocation).addObjectAttachments(RpcContext.getServerAttachment().getObjectAttachments());
+            }
 
-        try {
+            Map<String, Object> contextAttachments = RpcContext.getClientAttachment().getObjectAttachments();
+            if (CollectionUtils.isNotEmptyMap(contextAttachments)) {
+                /**
+                 * invocation.addAttachmentsIfAbsent(context){@link RpcInvocation#addAttachmentsIfAbsent(Map)}should not be used here,
+                 * because the {@link RpcContext#setAttachment(String, String)} is passed in the Filter when the call is triggered
+                 * by the built-in retry mechanism of the Dubbo. The attachment to update RpcContext will no longer work, which is
+                 * a mistake in most cases (for example, through Filter to RpcContext output traceId and spanId and other information).
+                 */
+                ((RpcInvocation) invocation).addObjectAttachments(contextAttachments);
+            }
+
             // pass default timeout set by end user (ReferenceConfig)
             Object countDown = context.getObjectAttachment(TIME_COUNTDOWN_KEY);
             if (countDown != null) {
                 TimeoutCountDown timeoutCountDown = (TimeoutCountDown) countDown;
                 if (timeoutCountDown.isExpired()) {
                     return AsyncRpcResult.newDefaultAsyncResult(new RpcException(RpcException.TIMEOUT_TERMINATE,
-                            "No time left for making the following call: " + invocation.getServiceName() + "."
-                                    + invocation.getMethodName() + ", terminate directly."), invocation);
+                        "No time left for making the following call: " + invocation.getServiceName() + "."
+                            + invocation.getMethodName() + ", terminate directly."), invocation);
                 }
             }
 
             RpcContext.removeServerContext();
             return invoker.invoke(invocation);
         } finally {
-            RpcContext.removeServiceContext();
-            RpcContext.removeClientAttachment();
+            RpcContext.restoreServiceContext(originServiceContext);
         }
     }
 
@@ -116,11 +117,29 @@ public class ConsumerContextFilter implements ClusterFilter, ClusterFilter.Liste
     public void onResponse(Result appResponse, Invoker<?> invoker, Invocation invocation) {
         // pass attachments to result
         RpcContext.getServerContext().setObjectAttachments(appResponse.getObjectAttachments());
+
+        removeContext(invocation);
     }
 
     @Override
     public void onError(Throwable t, Invoker<?> invoker, Invocation invocation) {
+        removeContext(invocation);
+    }
 
+    private void removeContext(Invocation invocation) {
+        RpcContext.removeClientAttachment();
+        if (invocation instanceof RpcInvocation) {
+            RpcInvocation rpcInvocation = (RpcInvocation) invocation;
+            if (rpcInvocation.getInvokeMode() != null) {
+                // clear service context if not in sync mode
+                if (rpcInvocation.getInvokeMode() == InvokeMode.ASYNC || rpcInvocation.getInvokeMode() == InvokeMode.FUTURE) {
+                    RpcContext.removeServiceContext();
+                }
+            }
+        }
+        // server context must not be removed because user might use it on callback.
+        // So the clear of is delayed til the start of the next rpc call, see RpcContext.removeServerContext(); in invoke() above
+        // RpcContext.removeServerContext();
     }
 
 }

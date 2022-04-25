@@ -22,6 +22,7 @@ import org.apache.dubbo.common.config.ConfigurationUtils;
 import org.apache.dubbo.common.extension.ExtensionLoader;
 import org.apache.dubbo.common.serialize.support.SerializableClassRegistry;
 import org.apache.dubbo.common.serialize.support.SerializationOptimizer;
+import org.apache.dubbo.common.url.component.ServiceConfigURL;
 import org.apache.dubbo.common.utils.CollectionUtils;
 import org.apache.dubbo.common.utils.ConcurrentHashSet;
 import org.apache.dubbo.common.utils.NetUtils;
@@ -180,10 +181,27 @@ public class DubboProtocol extends AbstractProtocol {
             Invocation invocation = createInvocation(channel, channel.getUrl(), methodKey);
             if (invocation != null) {
                 try {
+                    if (Boolean.TRUE.toString().equals(invocation.getAttachment(STUB_EVENT_KEY))) {
+                        tryToGetStubService(channel, invocation);
+                    }
                     received(channel, invocation);
                 } catch (Throwable t) {
                     logger.warn("Failed to invoke event method " + invocation.getMethodName() + "(), cause: " + t.getMessage(), t);
                 }
+            }
+        }
+
+        private void tryToGetStubService(Channel channel, Invocation invocation) throws RemotingException {
+            try {
+                Invoker<?> invoker = getInvoker(channel, invocation);
+            } catch (RemotingException e) {
+                String serviceKey = serviceKey(
+                    0,
+                    (String) invocation.getObjectAttachments().get(PATH_KEY),
+                    (String) invocation.getObjectAttachments().get(VERSION_KEY),
+                    (String) invocation.getObjectAttachments().get(GROUP_KEY)
+                );
+                throw new RemotingException(channel, "The stub service[" + serviceKey + "] is not found, it may not be exported yet");
             }
         }
 
@@ -249,13 +267,14 @@ public class DubboProtocol extends AbstractProtocol {
         int port = channel.getLocalAddress().getPort();
         String path = (String) inv.getObjectAttachments().get(PATH_KEY);
 
-        // if it's callback service on client side
+        //if it's stub service on client side(after enable stubevent, usually is set up onconnect or ondisconnect method)
         isStubServiceInvoke = Boolean.TRUE.toString().equals(inv.getObjectAttachments().get(STUB_EVENT_KEY));
         if (isStubServiceInvoke) {
-            port = channel.getRemoteAddress().getPort();
+            //when a stub service export to local, it usually can't be exposed to port
+            port = 0;
         }
 
-        //callback
+        // if it's callback service on client side
         isCallBackServiceInvoke = isClientSide(channel) && !isStubServiceInvoke;
         if (isCallBackServiceInvoke) {
             path += "." + inv.getObjectAttachments().get(CALLBACK_SERVICE_KEY);
@@ -342,7 +361,7 @@ public class DubboProtocol extends AbstractProtocol {
 
     private void checkDestroyed() {
         if (destroyed.get()) {
-            throw new IllegalStateException( getClass().getSimpleName() + " is destroyed");
+            throw new IllegalStateException(getClass().getSimpleName() + " is destroyed");
         }
     }
 
@@ -607,7 +626,7 @@ public class DubboProtocol extends AbstractProtocol {
      */
     private ReferenceCountExchangeClient buildReferenceCountExchangeClient(URL url) {
         ExchangeClient exchangeClient = initClient(url);
-        ReferenceCountExchangeClient client = new ReferenceCountExchangeClient(exchangeClient);
+        ReferenceCountExchangeClient client = new ReferenceCountExchangeClient(exchangeClient, DubboCodec.NAME);
         // read configs
         int shutdownTimeout = ConfigurationUtils.getServerShutdownTimeout(url.getScopeModel());
         client.setShutdownWaitTime(shutdownTimeout);
@@ -626,9 +645,6 @@ public class DubboProtocol extends AbstractProtocol {
          * which means params are shared among different services. Since client is shared among services this is currently not a problem.
          */
         String str = url.getParameter(CLIENT_KEY, url.getParameter(SERVER_KEY, DEFAULT_REMOTING_CLIENT));
-        url = url.addParameter(CODEC_KEY, DubboCodec.NAME);
-        // enable heartbeat by default
-        url = url.addParameterIfAbsent(HEARTBEAT_KEY, String.valueOf(DEFAULT_HEARTBEAT));
 
         // BIO is not allowed since it has severe performance issue.
         if (StringUtils.isNotEmpty(str) && !url.getOrDefaultFrameworkModel().getExtensionLoader(Transporter.class).hasExtension(str)) {
@@ -638,10 +654,15 @@ public class DubboProtocol extends AbstractProtocol {
 
         ExchangeClient client;
         try {
+            // Replace InstanceAddressURL with ServiceConfigURL.
+            url = new ServiceConfigURL(DubboCodec.NAME, url.getUsername(), url.getPassword(), url.getHost(), url.getPort(), url.getPath(),  url.getAllParameters());
+            url = url.addParameter(CODEC_KEY, DubboCodec.NAME);
+            // enable heartbeat by default
+            url = url.addParameterIfAbsent(HEARTBEAT_KEY, String.valueOf(DEFAULT_HEARTBEAT));
+
             // connection should be lazy
             if (url.getParameter(LAZY_CONNECT_KEY, false)) {
                 client = new LazyConnectExchangeClient(url, requestHandler);
-
             } else {
                 client = Exchangers.connect(url, requestHandler);
             }

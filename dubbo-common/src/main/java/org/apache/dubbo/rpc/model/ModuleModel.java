@@ -49,7 +49,7 @@ public class ModuleModel extends ScopeModel {
     }
 
     public ModuleModel(ApplicationModel applicationModel, boolean isInternal) {
-        super(applicationModel, ExtensionScope.MODULE);
+        super(applicationModel, ExtensionScope.MODULE, isInternal);
         Assert.notNull(applicationModel, "ApplicationModel can not be null");
         this.applicationModel = applicationModel;
         applicationModel.addModule(this, isInternal);
@@ -118,6 +118,11 @@ public class ModuleModel extends ScopeModel {
         if (moduleEnvironment != null) {
             moduleEnvironment.destroy();
             moduleEnvironment = null;
+        }
+
+        if (moduleConfigManager != null) {
+            moduleConfigManager.destroy();
+            moduleConfigManager = null;
         }
 
         // destroy application if none pub module

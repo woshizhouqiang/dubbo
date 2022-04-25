@@ -219,7 +219,7 @@ public class ConfigManager extends AbstractConfigManager implements ApplicationE
 
     @Override
     public void refreshAll() {
-        // refresh all configs here,
+        // refresh all configs here
         getApplication().ifPresent(ApplicationConfig::refresh);
         getMonitor().ifPresent(MonitorConfig::refresh);
         getMetrics().ifPresent(MetricsConfig::refresh);
@@ -297,7 +297,7 @@ public class ConfigManager extends AbstractConfigManager implements ApplicationE
         }
     }
 
-    ConfigMode getConfigMode() {
+    public ConfigMode getConfigMode() {
         return configMode;
     }
 }

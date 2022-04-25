@@ -18,6 +18,7 @@ package org.apache.dubbo.rpc.cluster.support;
 
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.threadlocal.NamedInternalThreadFactory;
+import org.apache.dubbo.common.threadpool.manager.FrameworkExecutorRepository;
 import org.apache.dubbo.rpc.Invocation;
 import org.apache.dubbo.rpc.Invoker;
 import org.apache.dubbo.rpc.Result;
@@ -56,7 +57,8 @@ public class ForkingClusterInvoker<T> extends AbstractClusterInvoker<T> {
 
     public ForkingClusterInvoker(Directory<T> directory) {
         super(directory);
-        executor = directory.getUrl().getOrDefaultApplicationModel().getApplicationExecutorRepository().getSharedExecutor();
+        executor = directory.getUrl().getOrDefaultFrameworkModel().getBeanFactory()
+            .getBean(FrameworkExecutorRepository.class).getSharedExecutor();
     }
 
     @Override
@@ -81,11 +83,14 @@ public class ForkingClusterInvoker<T> extends AbstractClusterInvoker<T> {
             }
             RpcContext.getServiceContext().setInvokers((List) selected);
             final AtomicInteger count = new AtomicInteger();
-            final BlockingQueue<Object> ref = new LinkedBlockingQueue<>();
+            final BlockingQueue<Object> ref = new LinkedBlockingQueue<>(1);
             for (final Invoker<T> invoker : selected) {
                 URL consumerUrl = RpcContext.getServiceContext().getConsumerUrl();
                 executor.execute(() -> {
                     try {
+                        if (ref.size() > 0) {
+                            return;
+                        }
                         Result result = invokeWithContextAsync(invoker, invocation, consumerUrl);
                         ref.offer(result);
                     } catch (Throwable e) {

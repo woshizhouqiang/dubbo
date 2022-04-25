@@ -25,11 +25,13 @@ import org.apache.dubbo.common.logger.LoggerFactory;
 import org.apache.dubbo.common.resource.GlobalResourcesRepository;
 import org.apache.dubbo.common.utils.Assert;
 import org.apache.dubbo.config.ApplicationConfig;
+import org.apache.dubbo.metadata.definition.TypeDefinitionBuilder;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
@@ -51,11 +53,11 @@ public class FrameworkModel extends ScopeModel {
 
     private volatile ApplicationModel defaultAppModel;
 
-    private static List<FrameworkModel> allInstances = Collections.synchronizedList(new ArrayList<>());
+    private static List<FrameworkModel> allInstances = new CopyOnWriteArrayList<>();
 
-    private List<ApplicationModel> applicationModels = Collections.synchronizedList(new ArrayList<>());
+    private List<ApplicationModel> applicationModels = new CopyOnWriteArrayList<>();
 
-    private List<ApplicationModel> pubApplicationModels = Collections.synchronizedList(new ArrayList<>());
+    private List<ApplicationModel> pubApplicationModels = new CopyOnWriteArrayList<>();
 
     private FrameworkServiceRepository serviceRepository;
 
@@ -64,8 +66,8 @@ public class FrameworkModel extends ScopeModel {
     private Object instLock = new Object();
 
     public FrameworkModel() {
-        super(null, ExtensionScope.FRAMEWORK);
-        this.setInternalId(index.getAndIncrement()+"");
+        super(null, ExtensionScope.FRAMEWORK, false);
+        this.setInternalId(String.valueOf(index.getAndIncrement()));
         // register FrameworkModel instance early
         synchronized (globalLock) {
             allInstances.add(this);
@@ -80,6 +82,9 @@ public class FrameworkModel extends ScopeModel {
     @Override
     protected void initialize() {
         super.initialize();
+
+        TypeDefinitionBuilder.initBuilders(this);
+
         serviceRepository = new FrameworkServiceRepository(this);
 
         ExtensionLoader<ScopeModelInitializer> initializerExtensionLoader = this.getExtensionLoader(ScopeModelInitializer.class);
@@ -246,6 +251,19 @@ public class FrameworkModel extends ScopeModel {
         }
     }
 
+    /**
+     * Protocols are special resources that need to be destroyed as soon as possible.
+     *
+     * Since connections inside protocol are not classified by applications, trying to destroy protocols in advance might only work for singleton application scenario.
+     */
+    void tryDestroyProtocols() {
+        synchronized (instLock) {
+            if (pubApplicationModels.size() == 0) {
+                notifyProtocolDestroy();
+            }
+        }
+    }
+
     void tryDestroy() {
         synchronized (instLock) {
             if (pubApplicationModels.size() == 0) {
@@ -302,10 +320,16 @@ public class FrameworkModel extends ScopeModel {
         return scopeModel != null ? scopeModel.getDesc() : null;
     }
 
+    /**
+     * Get all application models except for the internal application model.
+     */
     public List<ApplicationModel> getApplicationModels() {
         return Collections.unmodifiableList(pubApplicationModels);
     }
 
+    /**
+     * Get all application models including the internal application model.
+     */
     public List<ApplicationModel> getAllApplicationModels() {
         return Collections.unmodifiableList(applicationModels);
     }

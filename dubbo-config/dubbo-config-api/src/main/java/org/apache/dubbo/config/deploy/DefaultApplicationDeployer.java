@@ -26,6 +26,7 @@ import org.apache.dubbo.common.config.configcenter.wrapper.CompositeDynamicConfi
 import org.apache.dubbo.common.deploy.AbstractDeployer;
 import org.apache.dubbo.common.deploy.ApplicationDeployListener;
 import org.apache.dubbo.common.deploy.ApplicationDeployer;
+import org.apache.dubbo.common.deploy.DeployListener;
 import org.apache.dubbo.common.deploy.DeployState;
 import org.apache.dubbo.common.deploy.ModuleDeployer;
 import org.apache.dubbo.common.extension.ExtensionLoader;
@@ -33,6 +34,7 @@ import org.apache.dubbo.common.lang.ShutdownHookCallbacks;
 import org.apache.dubbo.common.logger.Logger;
 import org.apache.dubbo.common.logger.LoggerFactory;
 import org.apache.dubbo.common.threadpool.manager.ExecutorRepository;
+import org.apache.dubbo.common.threadpool.manager.FrameworkExecutorRepository;
 import org.apache.dubbo.common.utils.ArrayUtils;
 import org.apache.dubbo.common.utils.CollectionUtils;
 import org.apache.dubbo.common.utils.StringUtils;
@@ -44,16 +46,9 @@ import org.apache.dubbo.config.RegistryConfig;
 import org.apache.dubbo.config.context.ConfigManager;
 import org.apache.dubbo.config.utils.CompositeReferenceCache;
 import org.apache.dubbo.config.utils.ConfigValidationUtils;
-import org.apache.dubbo.metadata.MetadataService;
-import org.apache.dubbo.metadata.MetadataServiceExporter;
-import org.apache.dubbo.metadata.WritableMetadataService;
 import org.apache.dubbo.metadata.report.MetadataReportFactory;
 import org.apache.dubbo.metadata.report.MetadataReportInstance;
-import org.apache.dubbo.registry.client.DefaultServiceInstance;
-import org.apache.dubbo.registry.client.ServiceInstance;
 import org.apache.dubbo.registry.client.metadata.ServiceInstanceMetadataUtils;
-import org.apache.dubbo.registry.client.metadata.store.InMemoryWritableMetadataService;
-import org.apache.dubbo.registry.client.metadata.store.RemoteMetadataServiceImpl;
 import org.apache.dubbo.registry.support.RegistryManager;
 import org.apache.dubbo.rpc.model.ApplicationModel;
 import org.apache.dubbo.rpc.model.ModuleModel;
@@ -76,15 +71,12 @@ import java.util.function.Supplier;
 
 import static java.lang.String.format;
 import static org.apache.dubbo.common.config.ConfigurationUtils.parseProperties;
-import static org.apache.dubbo.common.constants.CommonConstants.DEFAULT_METADATA_STORAGE_TYPE;
 import static org.apache.dubbo.common.constants.CommonConstants.REGISTRY_SPLIT_PATTERN;
 import static org.apache.dubbo.common.constants.CommonConstants.REMOTE_METADATA_STORAGE_TYPE;
 import static org.apache.dubbo.common.utils.StringUtils.isEmpty;
 import static org.apache.dubbo.common.utils.StringUtils.isNotEmpty;
 import static org.apache.dubbo.metadata.MetadataConstants.DEFAULT_METADATA_PUBLISH_DELAY;
 import static org.apache.dubbo.metadata.MetadataConstants.METADATA_PUBLISH_DELAY_KEY;
-import static org.apache.dubbo.registry.client.metadata.ServiceInstanceMetadataUtils.calInstanceRevision;
-import static org.apache.dubbo.registry.client.metadata.ServiceInstanceMetadataUtils.setMetadataStorageType;
 import static org.apache.dubbo.remoting.Constants.CLIENT_KEY;
 
 /**
@@ -102,24 +94,19 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
 
     private final ReferenceCache referenceCache;
 
+    private final FrameworkExecutorRepository frameworkExecutorRepository;
     private final ExecutorRepository executorRepository;
 
-    private volatile ServiceInstance serviceInstance;
-
-    private AtomicBoolean hasPreparedApplicationInstance = new AtomicBoolean(false);
-    private AtomicBoolean hasPreparedInternalModule = new AtomicBoolean(false);
-
-    private volatile MetadataService metadataService;
-
-    private volatile MetadataServiceExporter metadataServiceExporter;
+    private final AtomicBoolean hasPreparedApplicationInstance = new AtomicBoolean(false);
+    private volatile boolean hasPreparedInternalModule = false;
 
     private ScheduledFuture<?> asyncMetadataFuture;
-    private volatile CompletableFuture startFuture;
-    private DubboShutdownHook dubboShutdownHook;
-    private Object stateLock = new Object();
-    private Object startLock = new Object();
-    private Object destroyLock = new Object();
-    private Object internalModuleLock = new Object();
+    private volatile CompletableFuture<Boolean> startFuture;
+    private final DubboShutdownHook dubboShutdownHook;
+    private final Object stateLock = new Object();
+    private final Object startLock = new Object();
+    private final Object destroyLock = new Object();
+    private final Object internalModuleLock = new Object();
 
     public DefaultApplicationDeployer(ApplicationModel applicationModel) {
         super(applicationModel);
@@ -128,6 +115,7 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
         environment = applicationModel.getModelEnvironment();
 
         referenceCache = new CompositeReferenceCache(applicationModel);
+        frameworkExecutorRepository = applicationModel.getFrameworkModel().getBeanFactory().getBean(FrameworkExecutorRepository.class);
         executorRepository = getExtensionLoader(ExecutorRepository.class).getDefaultExtension();
         dubboShutdownHook = new DubboShutdownHook(applicationModel);
 
@@ -161,17 +149,16 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
         dubboShutdownHook.unregister();
     }
 
+    /**
+     * Close registration of instance for pure Consumer process by setting registerConsumer to 'false'
+     * by default is true.
+     */
     private boolean isRegisterConsumerInstance() {
         Boolean registerConsumer = getApplication().getRegisterConsumer();
-        return Boolean.TRUE.equals(registerConsumer);
-    }
-
-    private String getMetadataType() {
-        String type = getApplication().getMetadataType();
-        if (StringUtils.isEmpty(type)) {
-            type = DEFAULT_METADATA_STORAGE_TYPE;
+        if (registerConsumer == null) {
+            return true;
         }
-        return type;
+        return Boolean.TRUE.equals(registerConsumer);
     }
 
     @Override
@@ -184,12 +171,12 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
      */
     @Override
     public void initialize() {
-        if (initialized.get()) {
+        if (initialized) {
             return;
         }
         // Ensure that the initialization is completed when concurrent calls
         synchronized (startLock) {
-            if (initialized.get()) {
+            if (initialized) {
                 return;
             }
             // register shutdown hook
@@ -204,9 +191,7 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
             // @since 2.7.8
             startMetadataCenter();
 
-            initMetadataService();
-
-            initialized.set(true);
+            initialized = true;
 
             if (logger.isInfoEnabled()) {
                 logger.info(getIdentifier() + " has been initialized!");
@@ -296,13 +281,14 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
         }
 
         MetadataReportInstance metadataReportInstance = applicationModel.getBeanFactory().getBean(MetadataReportInstance.class);
+        List<MetadataReportConfig> validMetadataReportConfigs = new ArrayList<>(metadataReportConfigs.size());
         for (MetadataReportConfig metadataReportConfig : metadataReportConfigs) {
             ConfigValidationUtils.validateMetadataConfig(metadataReportConfig);
-            if (!metadataReportConfig.isValid()) {
-                logger.info("Ignore invalid metadata-report config: " + metadataReportConfig);
-                continue;
-            }
-            metadataReportInstance.init(metadataReportConfig);
+            validMetadataReportConfigs.add(metadataReportConfig);
+        }
+        metadataReportInstance.init(validMetadataReportConfigs);
+        if (!metadataReportInstance.inited()) {
+            throw new IllegalStateException(String.format("%s MetadataConfigs found, but none of them is valid.", metadataReportConfigs.size()));
         }
     }
 
@@ -357,7 +343,7 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
         if (cc.getParameters() == null) {
             cc.setParameters(new HashMap<>());
         }
-        if (registryConfig.getParameters() != null) {
+        if (CollectionUtils.isNotEmptyMap(registryConfig.getParameters())) {
             cc.getParameters().putAll(registryConfig.getParameters()); // copy the parameters
         }
         cc.getParameters().put(CLIENT_KEY, registryConfig.getClient());
@@ -392,11 +378,23 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
                 .filter(this::isUsedRegistryAsMetadataCenter)
                 .map(this::registryAsMetadataCenter)
                 .forEach(metadataReportConfig -> {
-                    Optional<MetadataReportConfig> configOptional = configManager.getConfig(MetadataReportConfig.class, metadataReportConfig.getId());
-                    if (configOptional.isPresent()) {
-                        return;
+                    if (metadataReportConfig.getId() == null) {
+                        Collection<MetadataReportConfig> metadataReportConfigs = configManager.getMetadataConfigs();
+                        if (CollectionUtils.isNotEmpty(metadataReportConfigs)) {
+                            for (MetadataReportConfig existedConfig : metadataReportConfigs) {
+                                if (existedConfig.getId() == null && existedConfig.getAddress().equals(metadataReportConfig.getAddress())) {
+                                    return;
+                                }
+                            }
+                        }
+                        configManager.addMetadataReport(metadataReportConfig);
+                    } else {
+                        Optional<MetadataReportConfig> configOptional = configManager.getConfig(MetadataReportConfig.class, metadataReportConfig.getId());
+                        if (configOptional.isPresent()) {
+                            return;
+                        }
+                        configManager.addMetadataReport(metadataReportConfig);
                     }
-                    configManager.addMetadataReport(metadataReportConfig);
                     logger.info("use registry as metadata-center: " + metadataReportConfig);
                 });
         }
@@ -460,14 +458,13 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
     private MetadataReportConfig registryAsMetadataCenter(RegistryConfig registryConfig) {
         String protocol = registryConfig.getProtocol();
         URL url = URL.valueOf(registryConfig.getAddress(), registryConfig.getScopeModel());
-        String id = "metadata-center-" + protocol + "-" + url.getHost() + "-" + url.getPort();
         MetadataReportConfig metadataReportConfig = new MetadataReportConfig();
-        metadataReportConfig.setId(id);
+        metadataReportConfig.setId(registryConfig.getId());
         metadataReportConfig.setScopeModel(applicationModel);
         if (metadataReportConfig.getParameters() == null) {
             metadataReportConfig.setParameters(new HashMap<>());
         }
-        if (registryConfig.getParameters() != null) {
+        if (CollectionUtils.isNotEmptyMap(registryConfig.getParameters())) {
             metadataReportConfig.getParameters().putAll(registryConfig.getParameters()); // copy the parameters
         }
         metadataReportConfig.getParameters().put(CLIENT_KEY, registryConfig.getClient());
@@ -502,19 +499,6 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
     }
 
     /**
-     * Initialize {@link MetadataService} from {@link WritableMetadataService}'s extension
-     */
-    private void initMetadataService() {
-//        startMetadataCenter();
-        this.metadataService = getExtensionLoader(WritableMetadataService.class).getDefaultExtension();
-        // support injection by super type MetadataService
-        applicationModel.getBeanFactory().registerBean(this.metadataService);
-
-        //this.metadataServiceExporter = new ConfigurableMetadataServiceExporter(metadataService);
-        this.metadataServiceExporter = getExtensionLoader(MetadataServiceExporter.class).getDefaultExtension();
-    }
-
-    /**
      * Start the bootstrap
      *
      * @return
@@ -531,12 +515,12 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
                 boolean hasPendingModule = hasPendingModule();
 
                 if (isStarting()) {
-                    // currently is starting, maybe both start by module and application
-                    // if has new modules, start them
+                    // currently, is starting, maybe both start by module and application
+                    // if it has new modules, start them
                     if (hasPendingModule) {
                         startModules();
                     }
-                    // if is starting, reuse previous startFuture
+                    // if it is starting, reuse previous startFuture
                     return startFuture;
                 }
 
@@ -581,7 +565,7 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
         startModules();
 
         // prepare application instance
-        prepareApplicationInstance();
+//        prepareApplicationInstance();
 
         // Ignore checking new module after start
 //        executorRepository.getSharedExecutor().submit(() -> {
@@ -621,18 +605,12 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
 
     @Override
     public void prepareApplicationInstance() {
-        // ensure init and start internal module first
-        prepareInternalModule();
-
-        // always start metadata service on application model start, so it's ready whenever a new module is started
-        // export MetadataService
-        exportMetadataService();
-
         if (hasPreparedApplicationInstance.get()) {
             return;
         }
-        // if register consumer instance or has exported services
-        if (isRegisterConsumerInstance() || hasExportedServices()) {
+
+        if (isRegisterConsumerInstance()) {
+            exportMetadataService();
             if (hasPreparedApplicationInstance.compareAndSet(false, true)) {
                 // register the local ServiceInstance if required
                 registerServiceInstance();
@@ -640,9 +618,12 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
         }
     }
 
-    private void prepareInternalModule() {
+    public void prepareInternalModule() {
+        if(hasPreparedInternalModule){
+            return;
+        }
         synchronized (internalModuleLock) {
-            if (!hasPreparedInternalModule.compareAndSet(false, true)) {
+            if (hasPreparedInternalModule) {
                 return;
             }
 
@@ -685,13 +666,13 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
                 return null;
             }
 
-            DynamicConfiguration dynamicConfiguration = null;
+            DynamicConfiguration dynamicConfiguration;
             try {
                 dynamicConfiguration = getDynamicConfiguration(configCenter.toUrl());
             } catch (Exception e) {
                 if (!configCenter.isCheck()) {
                     logger.warn("The configuration center failed to initialize", e);
-                    configCenter.checkOrUpdateInitialized(false);
+                    configCenter.setInitialized(false);
                     return null;
                 } else {
                     throw new IllegalStateException(e);
@@ -734,120 +715,40 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
         return factory.getDynamicConfiguration(connectionURL);
     }
 
-    /**
-     * export {@link MetadataService}
-     */
-    private void exportMetadataService() {
-        // fixme, let's disable local metadata service export at this moment
-        if (!REMOTE_METADATA_STORAGE_TYPE.equals(getMetadataType())) {
-            metadataServiceExporter.export();
-        }
-    }
-
-    private void unexportMetadataService() {
-        if (metadataServiceExporter != null && metadataServiceExporter.isExported()) {
-            try {
-                metadataServiceExporter.unexport();
-            } catch (Exception ignored) {
-                // ignored
-            }
-        }
-    }
+    private volatile boolean registered;
 
     private void registerServiceInstance() {
-        if (isRegisteredServiceInstance()) {
-            return;
-        }
-
-        ApplicationConfig application = getApplication();
-        String serviceName = application.getName();
-        ServiceInstance serviceInstance = createServiceInstance(serviceName);
-        boolean registered = true;
         try {
-            ServiceInstanceMetadataUtils.registerMetadataAndInstance(serviceInstance);
+            registered = true;
+            ServiceInstanceMetadataUtils.registerMetadataAndInstance(applicationModel);
         } catch (Exception e) {
-            registered = false;
             logger.error("Register instance error", e);
         }
         if (registered) {
             // scheduled task for updating Metadata and ServiceInstance
-            asyncMetadataFuture = executorRepository.getSharedScheduledExecutor().scheduleAtFixedRate(() -> {
+            asyncMetadataFuture = frameworkExecutorRepository.getSharedScheduledExecutor().scheduleWithFixedDelay(() -> {
 
                 // ignore refresh metadata on stopping
                 if (applicationModel.isDestroyed()) {
                     return;
                 }
-
-                InMemoryWritableMetadataService localMetadataService = (InMemoryWritableMetadataService) WritableMetadataService.getDefaultExtension(applicationModel);
-                localMetadataService.blockUntilUpdated();
                 try {
-                    if (!applicationModel.isDestroyed()) {
-                        ServiceInstanceMetadataUtils.refreshMetadataAndInstance(serviceInstance);
+                    if (!applicationModel.isDestroyed() && registered) {
+                        ServiceInstanceMetadataUtils.refreshMetadataAndInstance(applicationModel);
                     }
                 } catch (Exception e) {
                     if (!applicationModel.isDestroyed()) {
                         logger.error("Refresh instance and metadata error", e);
                     }
-                } finally {
-                    localMetadataService.releaseBlock();
                 }
             }, 0, ConfigurationUtils.get(applicationModel, METADATA_PUBLISH_DELAY_KEY, DEFAULT_METADATA_PUBLISH_DELAY), TimeUnit.MILLISECONDS);
         }
     }
 
-    private boolean isRegisteredServiceInstance() {
-        return this.serviceInstance != null;
-    }
-
-    private void doRegisterServiceInstance(ServiceInstance serviceInstance) {
-        // register instance only when at least one service is exported.
-        if (serviceInstance.getPort() > 0) {
-            publishMetadataToRemote(serviceInstance);
-            logger.info("Start registering instance address to registry.");
-            RegistryManager.getInstance(applicationModel).getServiceDiscoveries().forEach(serviceDiscovery ->
-            {
-                ServiceInstance serviceInstanceForRegistry = new DefaultServiceInstance((DefaultServiceInstance) serviceInstance);
-                calInstanceRevision(serviceDiscovery, serviceInstanceForRegistry);
-                if (logger.isDebugEnabled()) {
-                    logger.info("Start registering instance address to registry" + serviceDiscovery.getUrl() + ", instance " + serviceInstanceForRegistry);
-                }
-                // register metadata
-                serviceDiscovery.register(serviceInstanceForRegistry);
-            });
-        }
-    }
-
-    private void publishMetadataToRemote(ServiceInstance serviceInstance) {
-//        InMemoryWritableMetadataService localMetadataService = (InMemoryWritableMetadataService)WritableMetadataService.getDefaultExtension();
-//        localMetadataService.blockUntilUpdated();
-        if (logger.isInfoEnabled()) {
-            logger.info("Start publishing metadata to remote center, this only makes sense for applications enabled remote metadata center.");
-        }
-        RemoteMetadataServiceImpl remoteMetadataService = applicationModel.getBeanFactory().getBean(RemoteMetadataServiceImpl.class);
-        remoteMetadataService.publishMetadata(serviceInstance.getServiceName());
-    }
-
     private void unregisterServiceInstance() {
-        if (isRegisteredServiceInstance()) {
-            RegistryManager.getInstance(applicationModel).getServiceDiscoveries().forEach(serviceDiscovery -> {
-                try {
-                    serviceDiscovery.unregister(serviceInstance);
-                } catch (Exception ignored) {
-                    // ignored
-                }
-            });
+        if (registered) {
+            ServiceInstanceMetadataUtils.unregisterMetadataAndInstance(applicationModel);
         }
-    }
-
-    private ServiceInstance createServiceInstance(String serviceName) {
-        this.serviceInstance = new DefaultServiceInstance(serviceName, applicationModel);
-        setMetadataStorageType(serviceInstance, getMetadataType());
-        ServiceInstanceMetadataUtils.customizeInstance(this.serviceInstance);
-        return this.serviceInstance;
-    }
-
-    public ServiceInstance getServiceInstance() {
-        return serviceInstance;
     }
 
     @Override
@@ -863,12 +764,15 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
             }
             onStopping();
 
+            destroyRegistries();
+            destroyServiceDiscoveries();
+            destroyMetadataReports();
+
             unRegisterShutdownHook();
             if (asyncMetadataFuture != null) {
                 asyncMetadataFuture.cancel(true);
             }
             unregisterServiceInstance();
-            unexportMetadataService();
         }
     }
 
@@ -881,10 +785,6 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
             }
             try {
                 executeShutdownCallbacks();
-
-                destroyRegistries();
-                destroyServiceDiscoveries();
-                destroyMetadataReports();
 
                 // TODO should we close unused protocol server which only used by this application?
                 // protocol server will be closed on all applications of same framework are stopped currently, but no associate to application
@@ -909,7 +809,7 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
 
     @Override
     public void notifyModuleChanged(ModuleModel moduleModel, DeployState state) {
-        checkState();
+        checkState(moduleModel, state);
 
         // notify module state changed or module changed
         synchronized (stateLock) {
@@ -918,8 +818,11 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
     }
 
     @Override
-    public void checkState() {
+    public void checkState(ModuleModel moduleModel, DeployState moduleState) {
         synchronized (stateLock) {
+            if (!moduleModel.isInternal() && moduleState == DeployState.STARTED) {
+                prepareApplicationInstance();
+            }
             DeployState newState = calculateState();
             switch (newState) {
                 case STARTED:
@@ -937,11 +840,11 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
                 case FAILED:
                     Throwable error = null;
                     ModuleModel errorModule = null;
-                    for (ModuleModel moduleModel : applicationModel.getModuleModels()) {
-                        ModuleDeployer deployer = moduleModel.getDeployer();
+                    for (ModuleModel module : applicationModel.getModuleModels()) {
+                        ModuleDeployer deployer = module.getDeployer();
                         if (deployer.isFailed() && deployer.getError() != null) {
                             error = deployer.getError();
-                            errorModule = moduleModel;
+                            errorModule = module;
                             break;
                         }
                     }
@@ -960,7 +863,9 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
         int pending = 0, starting = 0, started = 0, stopping = 0, stopped = 0, failed = 0;
         for (ModuleModel moduleModel : applicationModel.getModuleModels()) {
             ModuleDeployer deployer = moduleModel.getDeployer();
-            if (deployer.isPending()) {
+            if (deployer == null) {
+                pending++;
+            } else if (deployer.isPending()) {
                 pending++;
             } else if (deployer.isStarting()) {
                 starting++;
@@ -1008,6 +913,21 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
         return newState;
     }
 
+    private void exportMetadataService() {
+        if (!isStarting()) {
+            return;
+        }
+        for (DeployListener<ApplicationModel> listener : listeners) {
+            try {
+                if (listener instanceof ApplicationDeployListener) {
+                    ((ApplicationDeployListener) listener).onModuleStarted(applicationModel);
+                }
+            } catch (Throwable e) {
+                logger.error(getIdentifier() + " an exception occurred when handle starting event", e);
+            }
+        }
+    }
+
     private void onStarting() {
         // pending -> starting
         // started -> starting
@@ -1033,11 +953,11 @@ public class DefaultApplicationDeployer extends AbstractDeployer<ApplicationMode
             }
             // refresh metadata
             try {
-                if (serviceInstance != null) {
-                    ServiceInstanceMetadataUtils.refreshMetadataAndInstance(serviceInstance);
+                if (registered) {
+                    ServiceInstanceMetadataUtils.refreshMetadataAndInstance(applicationModel);
                 }
             } catch (Exception e) {
-                logger.error("refresh metadata failed: " + e.getMessage(), e);
+                logger.error("refresh meta and instance failed: " + e.getMessage(), e);
             }
         } finally {
             // complete future

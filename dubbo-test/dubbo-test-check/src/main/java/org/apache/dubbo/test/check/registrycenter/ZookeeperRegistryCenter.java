@@ -16,6 +16,10 @@
  */
 package org.apache.dubbo.test.check.registrycenter;
 
+import org.apache.dubbo.common.logger.Logger;
+import org.apache.dubbo.common.logger.LoggerFactory;
+import org.apache.dubbo.common.utils.Assert;
+import org.apache.dubbo.common.utils.StringUtils;
 import org.apache.dubbo.test.check.exception.DubboTestException;
 import org.apache.dubbo.test.check.registrycenter.context.ZookeeperContext;
 import org.apache.dubbo.test.check.registrycenter.context.ZookeeperWindowsContext;
@@ -29,11 +33,14 @@ import org.apache.dubbo.test.check.registrycenter.processor.ResetZookeeperProces
 import org.apache.dubbo.test.check.registrycenter.processor.StopZookeeperUnixProcessor;
 import org.apache.dubbo.test.check.registrycenter.processor.StopZookeeperWindowsProcessor;
 
-import java.util.List;
+import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Objects;
+import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -65,7 +72,18 @@ class ZookeeperRegistryCenter implements RegistryCenter {
         } else {
             this.context = new ZookeeperWindowsContext();
         }
+
+        // initialize the context
+        this.context.setUnpackedDirectory(UNPACKED_DIRECTORY);
+        this.context.setSourceFile(TARGET_FILE_PATH);
     }
+
+    private static final Logger logger = LoggerFactory.getLogger(ZookeeperRegistryCenter.class);
+
+    /**
+     * The JVM arguments to set the embedded zookeeper directory.
+     */
+    private static final String CONFIG_EMBEDDED_ZOOKEEPER_DIRECTORY = "embeddedZookeeperPath";
 
     /**
      * The OS type.
@@ -88,9 +106,63 @@ class ZookeeperRegistryCenter implements RegistryCenter {
     private Map<OS, Map<Command, Processor>> processors = new HashMap<>();
 
     /**
+     * The default unpacked directory.
+     */
+    private static final String UNPACKED_DIRECTORY = "apache-zookeeper-bin";
+
+    /**
+     * The target name of zookeeper binary file.
+     */
+    private static final String TARGET_ZOOKEEPER_FILE_NAME = UNPACKED_DIRECTORY + ".tar.gz";
+
+    /**
+     * The path of target zookeeper binary file.
+     */
+    private static final Path TARGET_FILE_PATH = getTargetFilePath();
+
+    /**
      * The {@link #INITIALIZED} for flagging the {@link #startup()} method is called or not.
      */
-    private final AtomicBoolean INITIALIZED = new AtomicBoolean(false);
+    private static final AtomicBoolean INITIALIZED = new AtomicBoolean(false);
+
+    /**
+     * Returns the directory to store zookeeper binary archive.
+     * <p>The priorities to obtain the directory are as follows:</p>
+     * <p>1. Use System.getProperty({@link #CONFIG_EMBEDDED_ZOOKEEPER_DIRECTORY}) if not null or empty</p>
+     * <p>2. Use System.getProperty(user.home) if not null or empty</p>
+     * <p>3. Use System.getProperty(java.io.tmpdir)</p>
+     */
+    private static String getEmbeddedZookeeperDirectory() {
+        String directory;
+        // Use System.getProperty({@link #CONFIG_EMBEDDED_ZOOKEEPER_DIRECTORY})
+        directory = System.getProperty(CONFIG_EMBEDDED_ZOOKEEPER_DIRECTORY);
+        logger.info(String.format("The customized directory is %s to store zookeeper binary archive.",directory));
+        if (StringUtils.isNotEmpty(directory)) {
+            return directory;
+        }
+        // Use System.getProperty(user.home)
+        logger.info(String.format("The user home is %s to store zookeeper binary archive.",directory));
+        directory = System.getProperty("user.home");
+        logger.info(String.format("user.home is %s",directory));
+        if (StringUtils.isEmpty(directory)) {
+            // Use default temporary directory
+            directory = System.getProperty("java.io.tmpdir");
+            logger.info(String.format("The temporary directory is %s to store zookeeper binary archive.",directory));
+        }
+        Assert.notEmptyString(directory, "The directory to store zookeeper binary archive cannot be null or empty.");
+        return directory + File.separator + ".tmp" + File.separator + "zookeeper";
+
+    }
+
+    /**
+     * Returns the target file path.
+     */
+    private static Path getTargetFilePath() {
+        String zookeeperDirectory = getEmbeddedZookeeperDirectory();
+        Path targetFilePath = Paths.get(zookeeperDirectory, TARGET_ZOOKEEPER_FILE_NAME);
+        logger.info("Target file's absolute directory: " + targetFilePath);
+        return targetFilePath;
+    }
 
     /**
      * Returns the Operating System.
@@ -140,12 +212,17 @@ class ZookeeperRegistryCenter implements RegistryCenter {
      */
     @Override
     public void startup() throws DubboTestException {
-        if (!this.INITIALIZED.get()) {
-            if (!this.INITIALIZED.compareAndSet(false, true)) {
-                return;
-            }
-            for (Initializer initializer : this.initializers) {
-                initializer.initialize(this.context);
+        if (!INITIALIZED.get()) {
+            // global look, make sure only one thread can initialize the zookeeper instances.
+            synchronized (ZookeeperRegistryCenter.class) {
+                if (!INITIALIZED.get()) {
+                    for (Initializer initializer : this.initializers) {
+                        initializer.initialize(this.context);
+                    }
+                    // add shutdown hook
+                    Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdown()));
+                    INITIALIZED.set(true);
+                }
             }
         }
         this.get(os, Command.Start).process(this.context);

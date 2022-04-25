@@ -16,6 +16,8 @@
  */
 package org.apache.dubbo.rpc.protocol.tri;
 
+import org.apache.dubbo.triple.TripleWrapper;
+
 import com.google.protobuf.BoolValue;
 import com.google.protobuf.BytesValue;
 import com.google.protobuf.DoubleValue;
@@ -28,9 +30,8 @@ import com.google.protobuf.ListValue;
 import com.google.protobuf.Message;
 import com.google.protobuf.Parser;
 import com.google.protobuf.StringValue;
-import grpc.health.v1.HealthCheckRequest;
-import grpc.health.v1.HealthCheckResponse;
-import org.apache.dubbo.triple.TripleWrapper;
+import io.grpc.health.v1.HealthCheckRequest;
+import io.grpc.health.v1.HealthCheckResponse;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -66,12 +67,12 @@ public class SingleProtobufUtilsTest {
         Assertions.assertNotNull(parser);
 
         TripleWrapper.TripleRequestWrapper requestWrapper = TripleWrapper.TripleRequestWrapper.newBuilder()
-            .setSerializeType("hessian4").build();
+                .setSerializeType("hessian4").build();
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        SingleProtobufUtils.serialize(requestWrapper,bos);
+        SingleProtobufUtils.serialize(requestWrapper, bos);
 
         ByteArrayInputStream bis = new ByteArrayInputStream(bos.toByteArray());
         TripleWrapper.TripleRequestWrapper tripleRequestWrapper = SingleProtobufUtils.deserialize(bis, TripleWrapper.TripleRequestWrapper.class);
-        Assertions.assertEquals(tripleRequestWrapper.getSerializeType(),"hessian4");
+        Assertions.assertEquals(tripleRequestWrapper.getSerializeType(), "hessian4");
     }
 }

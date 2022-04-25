@@ -25,6 +25,8 @@ import org.apache.dubbo.common.utils.StringUtils;
 import org.apache.dubbo.config.annotation.Method;
 import org.apache.dubbo.config.support.Parameter;
 import org.apache.dubbo.rpc.model.AsyncMethodInfo;
+import org.apache.dubbo.rpc.model.ModuleModel;
+import org.apache.dubbo.rpc.model.ScopeModelUtil;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -82,7 +84,7 @@ public class MethodConfig extends AbstractMethodConfig {
     private Boolean sticky;
 
     /**
-     * Whether need to return
+     * Whether you need to return
      */
     private Boolean isReturn;
 
@@ -135,6 +137,10 @@ public class MethodConfig extends AbstractMethodConfig {
 
 
     public MethodConfig() {
+    }
+
+    public MethodConfig(ModuleModel moduleModel) {
+        super(moduleModel);
     }
 
     /**
@@ -231,7 +237,8 @@ public class MethodConfig extends AbstractMethodConfig {
         if (argument.getIndex() != null && argument.getIndex() >= 0) {
             String prefix = argument.getIndex() + ".";
             Environment environment = getScopeModel().getModelEnvironment();
-            java.lang.reflect.Method[] methods = argument.getClass().getMethods();
+            List<java.lang.reflect.Method> methods = MethodUtils.getMethods(argument.getClass(),
+                method -> method.getDeclaringClass() != Object.class);
             for (java.lang.reflect.Method method : methods) {
                 if (MethodUtils.isSetter(method)) {
                     String propertyName = extractPropertyName(method.getName());
@@ -247,7 +254,7 @@ public class MethodConfig extends AbstractMethodConfig {
                         String value = StringUtils.trim(subPropsConfiguration.getString(kebabPropertyName));
                         if (StringUtils.hasText(value) && ClassUtils.isTypeMatch(method.getParameterTypes()[0], value)) {
                             value = environment.resolvePlaceholders(value);
-                            method.invoke(argument, ClassUtils.convertPrimitive(method.getParameterTypes()[0], value));
+                            method.invoke(argument, ClassUtils.convertPrimitive(ScopeModelUtil.getFrameworkModel(getScopeModel()), method.getParameterTypes()[0], value));
                         }
                     } catch (Exception e) {
                         logger.info("Failed to override the property " + method.getName() + " in " +

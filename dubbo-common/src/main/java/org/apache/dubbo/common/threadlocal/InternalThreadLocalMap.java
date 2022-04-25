@@ -32,7 +32,12 @@ public final class InternalThreadLocalMap {
 
     private static final AtomicInteger NEXT_INDEX = new AtomicInteger();
 
-    public static final Object UNSET = new Object();
+    static final Object UNSET = new Object();
+
+    // Reference: https://hg.openjdk.java.net/jdk8/jdk8/jdk/file/tip/src/share/classes/java/util/ArrayList.java#l229
+    private static final int ARRAY_LIST_CAPACITY_MAX_SIZE = Integer.MAX_VALUE - 8;
+
+    private static final int ARRAY_LIST_CAPACITY_EXPAND_THRESHOLD = 1 << 30;
 
     public static InternalThreadLocalMap getIfSet() {
         Thread thread = Thread.currentThread();
@@ -50,6 +55,26 @@ public final class InternalThreadLocalMap {
         return slowGet();
     }
 
+    public static InternalThreadLocalMap getAndRemove() {
+        try {
+            Thread thread = Thread.currentThread();
+            if (thread instanceof InternalThread) {
+                return ((InternalThread) thread).threadLocalMap();
+            }
+            return slowThreadLocalMap.get();
+        } finally {
+            remove();
+        }
+    }
+
+    public static void set(InternalThreadLocalMap internalThreadLocalMap) {
+        Thread thread = Thread.currentThread();
+        if (thread instanceof InternalThread) {
+            ((InternalThread) thread).setThreadLocalMap(internalThreadLocalMap);
+        }
+        slowThreadLocalMap.set(internalThreadLocalMap);
+    }
+
     public static void remove() {
         Thread thread = Thread.currentThread();
         if (thread instanceof InternalThread) {
@@ -65,8 +90,8 @@ public final class InternalThreadLocalMap {
 
     public static int nextVariableIndex() {
         int index = NEXT_INDEX.getAndIncrement();
-        if (index < 0) {
-            NEXT_INDEX.decrementAndGet();
+        if (index >= ARRAY_LIST_CAPACITY_MAX_SIZE || index < 0) {
+            NEXT_INDEX.set(ARRAY_LIST_CAPACITY_MAX_SIZE);
             throw new IllegalStateException("Too many thread-local indexed variables");
         }
         return index;
@@ -133,13 +158,19 @@ public final class InternalThreadLocalMap {
     }
 
     private static int newCapacity(int index) {
-        int newCapacity = index;
-        newCapacity |= newCapacity >>> 1;
-        newCapacity |= newCapacity >>> 2;
-        newCapacity |= newCapacity >>> 4;
-        newCapacity |= newCapacity >>> 8;
-        newCapacity |= newCapacity >>> 16;
-        return ++newCapacity;
+        int newCapacity;
+        if (index < ARRAY_LIST_CAPACITY_EXPAND_THRESHOLD) {
+            newCapacity = index;
+            newCapacity |= newCapacity >>>  1;
+            newCapacity |= newCapacity >>>  2;
+            newCapacity |= newCapacity >>>  4;
+            newCapacity |= newCapacity >>>  8;
+            newCapacity |= newCapacity >>> 16;
+            newCapacity ++;
+        } else {
+            newCapacity = ARRAY_LIST_CAPACITY_MAX_SIZE;
+        }
+        return newCapacity;
     }
 
     private static InternalThreadLocalMap fastGet(InternalThread thread) {

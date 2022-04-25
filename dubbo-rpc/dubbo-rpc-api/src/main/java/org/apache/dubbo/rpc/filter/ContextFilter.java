@@ -115,7 +115,7 @@ public class ContextFilter implements Filter, Filter.Listener {
         // merged from dubbox
         // we may already add some attachments into RpcContext before this filter (e.g. in rest protocol)
         if (attachments != null) {
-            if (context.getObjectAttachments() != null) {
+            if (context.getObjectAttachments().size() > 0) {
                 context.getObjectAttachments().putAll(attachments);
             } else {
                 context.setObjectAttachments(attachments);
@@ -131,11 +131,6 @@ public class ContextFilter implements Filter, Filter.Listener {
             return invoker.invoke(invocation);
         } finally {
             context.clearAfterEachInvoke(true);
-            RpcContext.removeServerAttachment();
-            RpcContext.removeServiceContext();
-            // IMPORTANT! For async scenario, we must remove context from current thread, so we always create a new RpcContext for the next invoke for the same thread.
-            RpcContext.getClientAttachment().removeAttachment(TIME_COUNTDOWN_KEY);
-            RpcContext.removeServerContext();
         }
     }
 
@@ -143,10 +138,18 @@ public class ContextFilter implements Filter, Filter.Listener {
     public void onResponse(Result appResponse, Invoker<?> invoker, Invocation invocation) {
         // pass attachments to result
         appResponse.addObjectAttachments(RpcContext.getServerContext().getObjectAttachments());
+        removeContext();
     }
 
     @Override
     public void onError(Throwable t, Invoker<?> invoker, Invocation invocation) {
+        removeContext();
+    }
 
+    private void removeContext() {
+        RpcContext.removeServerAttachment();
+        RpcContext.removeClientAttachment();
+        RpcContext.removeServiceContext();
+        RpcContext.removeServerContext();
     }
 }

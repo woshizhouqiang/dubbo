@@ -21,13 +21,17 @@ import org.apache.dubbo.config.ApplicationConfig;
 import org.apache.dubbo.config.MetadataReportConfig;
 import org.apache.dubbo.config.context.ConfigManager;
 import org.apache.dubbo.rpc.model.ApplicationModel;
+
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
@@ -37,17 +41,20 @@ class MetadataReportInstanceTest {
     private MetadataReportConfig metadataReportConfig;
     private ConfigManager configManager;
 
-    private String registryId = "9103";
+    private final String registryId = "9103";
 
     @BeforeEach
     public void setUp() {
-        metadataReportInstance = new MetadataReportInstance();
         configManager = mock(ConfigManager.class);
         ApplicationModel applicationModel = spy(ApplicationModel.defaultModel());
+        metadataReportInstance = new MetadataReportInstance(applicationModel);
 
 
         URL url = URL.valueOf("metadata://127.0.0.1:20880/TestService?version=1.0.0&metadata=JTest");
         metadataReportConfig = mock(MetadataReportConfig.class);
+        when(metadataReportConfig.getUsername()).thenReturn("username");
+        when(metadataReportConfig.getPassword()).thenReturn("password");
+
         when(metadataReportConfig.getApplicationModel()).thenReturn(applicationModel);
         when(metadataReportConfig.toUrl()).thenReturn(url);
         when(metadataReportConfig.getScopeModel()).thenReturn(applicationModel);
@@ -61,16 +68,10 @@ class MetadataReportInstanceTest {
 
     @Test
     public void test() {
-        Assertions.assertThrows(IllegalStateException.class,
-            () -> metadataReportInstance.getMetadataReport(registryId),
-            "the metadata report was not initialized.");
+        Assertions.assertNull(metadataReportInstance.getMetadataReport(registryId), "the metadata report was not initialized.");
+        assertThat(metadataReportInstance.getMetadataReports(true), Matchers.anEmptyMap());
 
-        Assertions.assertThrows(IllegalStateException.class,
-            () -> metadataReportInstance.getMetadataReports(true),
-            "the metadata report was not initialized.");
-
-
-        metadataReportInstance.init(metadataReportConfig);
+        metadataReportInstance.init(Arrays.asList(metadataReportConfig));
         MetadataReport metadataReport = metadataReportInstance.getMetadataReport(registryId);
         Assertions.assertNotNull(metadataReport);
 
@@ -80,6 +81,9 @@ class MetadataReportInstanceTest {
         Map<String, MetadataReport> metadataReports = metadataReportInstance.getMetadataReports(true);
         Assertions.assertEquals(metadataReports.size(), 1);
         Assertions.assertEquals(metadataReports.get(registryId), metadataReport);
+
+        Assertions.assertEquals(metadataReportConfig.getUsername(), "username");
+        Assertions.assertEquals(metadataReportConfig.getPassword(), "password");
     }
 
 }

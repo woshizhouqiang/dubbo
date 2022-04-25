@@ -35,11 +35,11 @@ public class ExtensionDirector implements ExtensionAccessor {
 
     private final ConcurrentMap<Class<?>, ExtensionLoader<?>> extensionLoadersMap = new ConcurrentHashMap<>(64);
     private final ConcurrentMap<Class<?>, ExtensionScope> extensionScopeMap = new ConcurrentHashMap<>(64);
-    private ExtensionDirector parent;
+    private final ExtensionDirector parent;
     private final ExtensionScope scope;
-    private List<ExtensionPostProcessor> extensionPostProcessors = new ArrayList<>();
-    private ScopeModel scopeModel;
-    private AtomicBoolean destroyed = new AtomicBoolean();
+    private final List<ExtensionPostProcessor> extensionPostProcessors = new ArrayList<>();
+    private final ScopeModel scopeModel;
+    private final AtomicBoolean destroyed = new AtomicBoolean();
 
     public ExtensionDirector(ExtensionDirector parent, ExtensionScope scope, ScopeModel scopeModel) {
         this.parent = parent;
@@ -63,6 +63,7 @@ public class ExtensionDirector implements ExtensionAccessor {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public <T> ExtensionLoader<T> getExtensionLoader(Class<T> type) {
         checkDestroyed();
         if (type == null) {
@@ -111,12 +112,11 @@ public class ExtensionDirector implements ExtensionAccessor {
         if (isScopeMatched(type)) {
             // if scope is matched, just create it
             loader = createExtensionLoader0(type);
-        } else {
-            // if scope is not matched, ignore it
         }
         return loader;
     }
 
+    @SuppressWarnings("unchecked")
     private <T> ExtensionLoader<T> createExtensionLoader0(Class<T> type) {
         checkDestroyed();
         ExtensionLoader<T> loader;
@@ -139,7 +139,6 @@ public class ExtensionDirector implements ExtensionAccessor {
     }
 
     public void removeAllCachedLoader() {
-        // extensionLoadersMap.clear();
     }
 
     public void destroy() {
@@ -148,6 +147,8 @@ public class ExtensionDirector implements ExtensionAccessor {
                 extensionLoader.destroy();
             }
             extensionLoadersMap.clear();
+            extensionScopeMap.clear();
+            extensionPostProcessors.clear();
         }
     }
 

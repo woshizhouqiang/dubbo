@@ -23,6 +23,7 @@ import org.apache.dubbo.config.spring.api.HelloService;
 import org.apache.dubbo.config.spring.api.MethodCallback;
 import org.apache.dubbo.config.spring.context.annotation.provider.ProviderConfiguration;
 import org.apache.dubbo.config.spring.impl.MethodCallbackImpl;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
@@ -67,7 +68,7 @@ public class MethodConfigCallbackTest {
     private ConfigurableApplicationContext context;
 
     @DubboReference(check = false, async = true,
-        injvm = false, // Currently local call is not supported method callback cause by Injvm protocol is not supported ClusterFilter
+        injvm = false, // Currently, local call is not supported method callback cause by Injvm protocol is not supported ClusterFilter
         methods = {@Method(name = "sayHello",
         oninvoke = "methodCallback.oninvoke1",
         onreturn = "methodCallback.onreturn1",
@@ -75,7 +76,7 @@ public class MethodConfigCallbackTest {
     private HelloService helloServiceMethodCallBack;
 
     @DubboReference(check = false, async = true,
-            injvm = false, // Currently local call is not supported method callback cause by Injvm protocol is not supported ClusterFilter
+            injvm = false, // Currently, local call is not supported method callback cause by Injvm protocol is not supported ClusterFilter
             methods = {@Method(name = "sayHello",
             oninvoke = "methodCallback.oninvoke2",
             onreturn = "methodCallback.onreturn2",

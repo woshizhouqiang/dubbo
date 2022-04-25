@@ -17,6 +17,7 @@
 package org.apache.dubbo.rpc.model;
 
 import org.apache.dubbo.common.utils.StringUtils;
+
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -32,21 +33,20 @@ public class ScopeModelTest {
         FrameworkModel.destroyAll();
 
         FrameworkModel frameworkModel = new FrameworkModel();
-        ApplicationModel applicationModel1 = frameworkModel.newApplication();
-        ApplicationModel applicationModel2 = frameworkModel.newApplication();
+        ApplicationModel applicationModel = frameworkModel.newApplication();
 
         List<Throwable> errors = new ArrayList<>();
-        applicationModel1.addDestroyListener(scopeModel -> {
+        applicationModel.addDestroyListener(scopeModel -> {
             try {
                 try {
-                    applicationModel1.getDefaultModule();
+                    applicationModel.getDefaultModule();
                     Assertions.fail("Cannot create new module after application model destroyed");
                 } catch (Exception e) {
                     Assertions.assertEquals("ApplicationModel is destroyed", e.getMessage(), StringUtils.toString(e));
                 }
 
                 try {
-                    applicationModel1.newModule();
+                    applicationModel.newModule();
                     Assertions.fail("Cannot create new module after application model destroyed");
                 } catch (Exception e) {
                     Assertions.assertEquals("ApplicationModel is destroyed", e.getMessage(), StringUtils.toString(e));
